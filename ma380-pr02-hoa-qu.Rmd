@@ -1,0 +1,497 @@
+---
+title: "MA 380 Project Two"
+subtitle: "Bike Sharing Analysis"
+author: "Quan Hoang"
+date: "**Due Date: Friday November 17, 2023, 11:59 PM EST**"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r,include=FALSE}
+library(tidyverse)
+library(GLMsData)
+library(patchwork)
+library(statmod)
+library(MASS)
+```
+
+# Business Problem
+
+Many cities and towns now provide locked bikes throughout their
+neighborhoods.
+Customers sign-up for a sharing contract and they are able to
+pick up a bike in one location, and ride it to a different 
+location to return it.
+You have been hired to help a town understand when are customers
+using the bikes.
+The town administration would like to create a model that will
+predict the number of bikes used in a given hour and the locations
+that the bikes are moving from and to.
+
+The town's Information Technology department has prepared a
+data set for you.
+The data dictionary is provided below.
+This is the only data you have available for your analysis.
+
+
+## Data Dictionary
+
+| Variable       | Description                                               |
+|:---------------|:----------------------------------------------------------|
+| season.code         | Season (1 = Winter, 2 = Spring, 3 = Summer, 4 = Fall |
+| year.code           | Year indicator (0 = 2011, 1 = 2012) |
+| hour           | Hour (integer 0 to 23) |
+| holiday.code        | Indicator of holiday (0 = No, 1 = Yes) |
+| weekday.code        | Day of the week (0 = Sunday, 1 = Monday, ..., 6 = Saturday) |
+| weathersit.code     | Weather situation (1 = Clear/Partly Cloudy, 2 = Mist, 3 = Rain or Snow) |
+| temp           | Normalized temperature in Celsius. [(t - t_min)/(t_max - t_min), t_min = -9, t_max = 39] |
+| humidity       | Normalized humidity. Values are divided by 100 (max possible) |
+| windspeed      | Normalized wind speed. Values are divided by 67 (max possible) |
+| bikes | Count of rental bikes in each hour |
+
+
+## Task 0 (0 points)
+
+Read the data and provide appropriate types to the
+variables in the data set.
+Many of the variables are code as integers making it
+difficult to know what their values mean.
+Create new variables that are more human friendly.
+Note that in later tasks you may need to modify the
+variable types given here.
+Use function `read_csv()` from the `tidyverse` package
+and set the argument `col_types` appropriately.
+
+*****
+
+```{r}
+# import data
+bike <- read.csv("/Users/brenthoang/Library/CloudStorage/OneDrive-BentleyUniversity/MA 380/Project 2/ma380-pr02-bike-sharing.csv")
+
+# quick glimpse
+glimpse(bike)
+```
+
+## Task 1 (10 points)
+
+Assess whether or not the data you have will help you
+address the business problem that the town is facing.
+In your assessment be sure to clearly mention how the
+data you have been given will be useful or not in
+addressing the two concerns that the town's administration
+has.
+
+*****
+
+1. The business problem is to create a model that will predict the number of bikes used in a given hour and the locations that the bikes are moving from and to. However, as we explore the provided dataset, there is **no location identifier column(s) that helps to identify the locations of the bike**. Therefore, we could not create a model to predict the number of bikes used based on the bike location.
+
+2. The dataset does **provide useful insight regarding bike usage in a specific time**. Columns such as season.code, hour and holiday.code can be useful in the time aspect of bike usage. However, it also poses some correlation issue between some of the variables. We can deduct that there will be correlation between season.code, windspeed, temp and humidity. Taking these correlation into account will be important in the final model.
+
+
+## Task 2 (10 points)
+
+Which variables should be treated as categorical?
+Provide an explanation for choosing these variables as
+categorical and change their types in your data set.
+
+*****
+
+```{r}
+# characterize season and weekday
+bike$season <- factor(c("Winter", "Spring", "Summer", "Fall")[bike$season.code],
+                      levels = c("Winter", "Spring", "Summer", "Fall"))
+
+bike$weekday <- factor(c("Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday")
+                       [bike$weekday.code + 1],
+                       levels = c("Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"))
+
+bike$weather <- factor(c("Clear/Partly Cloudy", "Mist", "Rain or Snow")[bike$weathersit.code],
+                       levels = c("Clear/Partly Cloudy", "Mist", "Rain or Snow"))
+
+bike$holiday.code <- as.factor(bike$holiday.code)
+```
+
+List of variables should be treated as categorical variables:
+
+1. season.code (season): There are four seasons in a year and having it listed as a categorical variable makes sense. 
+1. holiday.code: This is binary variable because it can only be 'yes' or 'no'
+1. weekday.code (weekday): When dealing with weekday, it is best to list weekday as categorical variable to determine day(s) with most bike usage. An argument can be made to used this as numerical variable
+1. weathersit.code: Each inputs in the variable has its own definition of a weather characteristic which cannot be expressed as a numeric value 
+
+## Task 3 (12 points)
+
+Create a new variable called `workday` with values of `Yes`
+if the day is indeed a workday and `No` if it is either a
+weekend or a holiday.
+Describe one advantage and one disadvantage in including
+`workday` in your model.
+
+*****
+
+```{r}
+bike <- bike %>%
+  mutate(workday = case_when(
+    weekday.code == 0 | holiday.code == 1 ~ "No",
+    weekday.code == 6 | holiday.code == 1 ~ "No", 
+    TRUE ~ "Yes")
+    )
+
+# write.csv(bike, file = "/Users/brenthoang/Library/CloudStorage/OneDrive-BentleyUniversity/MA 380/Project 2/bike.csv", row.names = TRUE) -- check logic  
+```
+
+- An advantage using 'workday' is we can **simplify our model** since the use of 'weekday.code' and 'holiday.code' is accounted in 'workday'.
+
+- A disadvantage using 'workday' is we are **dismissing the relationship between 'weekday.code' and 'holiday.code' and 'bikes'**. For example, people might use bike more during holiday more than during the weekend (or reverse). The relationship between 'weekday.code', 'holiday.code', and 'bikes' needs to be clearly understood before implementing 'workday'.
+
+## Task 4 (30 points)
+
+Conduct an exploratory data analysis on the information you
+have available with a focus on answering some of the key
+questions that the town's administration has.
+Select **three** graphs and, for each one of them, explain
+what modeling decisions it supports.
+
+*****
+
+```{r, echo = FALSE}
+# bike usage and variable
+bnum.hour <- ggplot(data = bike, mapping = aes(x = as.factor(hour), y = bikes)) + 
+  geom_boxplot() + 
+  stat_summary(geom = "point", fun = mean, color = "purple") +
+  labs(x = "Hour", y = "Bikes", title = "Bike Usage and Hour") # good
+
+bnum.weekday <- ggplot(data = bike, mapping = aes(x = weekday, y = bikes)) + 
+  geom_boxplot() + coord_cartesian(ylim = c(0, 500)) + 
+  stat_summary(geom = "point", fun = mean, color = "purple") # no 
+
+bnum.holiday <- ggplot(data = bike, mapping = aes(x = holiday.code, y = bikes)) + 
+  geom_boxplot() + coord_cartesian(ylim = c(0, 500)) + 
+  stat_summary(geom = "point", fun = mean, color = "purple") # no 
+
+bnum.workday <- ggplot(data = bike, mapping = aes(x = workday, y = bikes)) +
+  geom_boxplot() + coord_cartesian(ylim = c(0, 500)) + 
+  stat_summary(geom = "point", fun = mean, color = "purple")
+
+bnum.season <- ggplot(data = bike, mapping = aes(x = season, y = bikes)) + 
+  geom_boxplot() + coord_cartesian(ylim = c(0, 500)) + 
+  stat_summary(geom = "point", fun = mean, color = "purple") # maybe
+
+bnum.weather <- ggplot(data = bike, mapping = aes(x = weather, y = bikes)) +
+  geom_boxplot() + coord_cartesian(ylim = c(0, 500)) + 
+  stat_summary(geom = "point", fun = mean, color = "purple") +
+  labs(x = "Weather", y = "Bikes", title = "Bike Usage and Weather")# good
+
+bnum.windspeed <- ggplot(data = bike, mapping = aes(x = windspeed, y = bikes)) + 
+  geom_point() + geom_smooth(se = FALSE) # no 
+
+bnum.humidity <- ggplot(data = bike, mapping = aes(x = humidity, y = bikes)) + 
+  geom_point() + geom_smooth(se = FALSE) # maybe
+
+bnum.temp <- ggplot(data = bike, mapping = aes(x = temp, y = bikes, color = season)) + 
+  geom_point(alpha=I(0.1)) + geom_smooth(se = FALSE) + coord_cartesian(ylim = c(0, 500)) + 
+  labs(x = "Normalized Temp.", y = "Bikes", title = "Bike Usage and Temperature")# good 
+
+# check correlation
+humidity.temp <- ggplot(data = bike, mapping = aes(x = humidity, y = temp)) + 
+  geom_point() + geom_smooth(se = FALSE) 
+
+temp.weather <- ggplot(data = bike, mapping = aes(x = weather, y = temp)) + 
+  geom_boxplot() + 
+  stat_summary(geom = "point", fun = mean, color = "purple")
+```
+
+```{r, fig.align='center'}
+(bnum.temp + bnum.weather)/(bnum.hour)
+```
+
+Objective of the project is to predict bike usage in a given period of time. The three graphs above show three variables which have potential to best explain bike usage in a given time. 
+
+1. temp: As temperature gets higher, bike usage increases. Also, the graph show how does temperature correlate with season. 
+1. weather: We see most bike usage when the weather is clear/partly clouded. Bike usage is less when weather is mist and rain/snow. In the graph, bike usage is the least when the weather is rain/snow.
+1. hour: Bike usage is peaked during the hour of 8, 17 and 18. We can see that there is clear less bike usage during late night or early morning (from hour 0 - 5). This variable is hard to categorize since there are too many dummy variables. We may consider other predictors. 
+
+**Warning:** This may not be variables for finalized model. Changes are expected along the way as more we discover if there is correlation between weather and temp, or as we have better predictor(s) for our model.  
+
+```{r, fig.align='center'}
+(bnum.holiday + humidity.temp)/(temp.weather)
+```
+
+Interesting finding: 
+
+1. Number of bike usage is less in holiday in general 
+1. There is little correlation between humidity and normalized temperature 
+1. weather and temperature may have correlation however as weather and temperature graph suggested, there is little correlation between those. 
+
+
+
+
+## Task 5 (24 points)
+
+Explore the **mean-variance** relationship for the number of 
+bikes rented per hour.
+Provide a bivariate plot showing this relationship.
+For each of the Poisson, Negative Binomial, and Gamma distributions
+use the information in the mean-variance relationship to
+determine which of these distributions would be most suitable
+for building a generalized linear model.
+
+*****
+
+```{r, fig.align='center'}
+# temp and bikes
+n <- 10
+
+# separating 
+distribution.set <- bike %>%
+  mutate(temp.bin = cut(temp,
+                        breaks = c(min(temp) - .01, 
+                                   quantile(temp, probs = (1:(n-1))/n),
+                                   max(temp) + .01)))
+
+distribution.set <- distribution.set %>%
+  group_by(temp.bin) %>%
+  summarize(sz = n(), mn = mean(bikes), vr = var(bikes))
+
+# log mean and log variance graph
+ggplot(data = distribution.set, mapping = aes(x = log(mn), y = log(vr))) +
+  geom_point() + geom_smooth(method = "lm", se = FALSE) +
+  labs(x = "Mean of Bikes (log-scale)", y = "Variance of Bikes (log-scale)")
+
+# get coefficient
+summary(lm(log(vr) ~ log(mn),
+   data = distribution.set,
+   weights = sz))
+
+```
+
+Reading from the graph, since our coefficient for the log mean and log variance is around 1, we can deduct that **our data is either a Poisson or Negative Binomial distribution**. We will determine which distribution is most suitable for our model based on our model residual and degree of freedom relationship as we proceed to create sample models. 
+
+**Note:** our model can also categorized as Gamma Distribution. However, it requires further testing on bikes frequency through histogram plot. We will check for this distribution if our model for both Poison and Negative Binomial is not suffice for predicting bike usage. 
+
+## Task 6 (40 points)
+
+Based on your responses to the previous tasks select an
+initial model (write it down here) and then search for a 
+good model of the number of bikes rented each hour.
+Select your final model and perform a thorough diagnostic 
+analysis.
+
+*****
+
+```{r}
+poisson.model1 <- glm(bikes ~ hour + temp + weather, data = bike,
+                      family = poisson(link = "log"))
+summary(poisson.model1)
+
+poisson.model1.1 <- glm(bikes ~ hour + temp + weather, data = bike,
+                      family = quasipoisson(link = "log"))
+summary(poisson.model1.1)
+```
+
+The initial model assuming our data follows Poisson Distribution in which hour is set as a numerical variable instead of categorical. Overall, our model suffers from large residual deviance and degree of freedom ratio. To put it in short, the variables' standard errors are lower than what they actually are (over dispersion). After running a quasipoisson model, our variable 'weatherMist' was not a signficant variable. 
+
+New models are created. Second model **assumes hour as a categorical variable** but the model still suffers from over dispersion. Third model **assumes data following Gamma distribution and hour is a numerical variable**. Fourth model **assumes data following Gamma distribution and hour is a categorical variable**. Both third and Fourth models look good. It is worth noting the AIC for the fourth model is significantly less than that of third's one. Fifth model **assumes data following Negative Binomial**. At this point it is clear that 'weatherMist' is not that of a significant data as shown in the third and fifth model. 
+
+```{r, include = FALSE}
+poisson.model2 <- glm(bikes ~ as.factor(hour) + temp + weather, data = bike,
+                      family = poisson(link = "log"))
+summary(poisson.model2)
+
+gamma.model1 <- glm(bikes ~ hour + temp + weather, data = bike,
+                    family = Gamma(link = "log"))
+summary(gamma.model1)
+
+gamma.model2 <- glm(bikes ~ as.factor(hour) + temp + weather, data = bike,
+                    family = Gamma(link = "log"))
+summary(gamma.model2)
+
+nb.model1 <- glm.nb(bikes ~ hour + temp + weather, data = bike)
+summary(nb.model1)
+```
+
+After doing some discovery, I determine to use the model with Negative Binomial distribution and hour as categorical variable as the model of choice to determine bike usage at given a period. The model doesn't suffer from under- or over dispersion. 
+
+```{r}
+nb.model2 <- glm.nb(bikes ~ as.factor(hour) + temp + weather, data = bike)
+summary(nb.model2)
+```
+
+Running diagnostic for the model chosen, there seems to not be any issue with the model. For the residual test, the narrow ended as we get further on the x-axis is because we have fewer points and less variance. 
+
+```{r, echo = FALSE, fig.align='center'}
+diagnostic <- bike %>%
+  mutate(fm1.eta = predict(nb.model2, type = "link"), # linear predictor 
+         fm1.mu = predict(nb.model2, type = "response"), # mean 
+         fm1.rD = resid(nb.model2, type = "deviance"), # residual page 221 tx
+         fm1.wR = fm1.eta + resid(nb.model2, type = "working")) # working response (lp + working residual)
+
+p1 <- ggplot(data = diagnostic,
+             mapping = aes(x = fm1.mu,
+                           y = fm1.rD)) +
+  geom_point() + geom_smooth(method = "lm", se = FALSE) +
+  labs(x = "Fitted Values",
+       y = "Deviance Residuals")
+
+p2 <- ggplot(data = diagnostic,
+             mapping = aes(x = fm1.mu,
+                           y = abs(fm1.rD))) +
+  geom_point() + geom_smooth(method = "lm",se = FALSE) +
+  labs(x = "Fitted Values",
+       y = "|Deviance Residuals|")
+
+p3 <- ggplot(data = diagnostic,
+             mapping = aes(x = fm1.wR,
+                           y = fm1.eta)) +
+  geom_point() + geom_smooth(method = "lm",se = FALSE) +
+  labs(x = "Working Response",
+       y = "Linear Predictor")
+
+p4 <- ggplot(data = diagnostic,
+             mapping = aes(x = temp,
+                           y = fm1.rD)) +
+  geom_point() + geom_smooth(method = "lm",se = FALSE) +
+  labs(x = "Diameter at Breast Height",
+       y = "Deviance Residuals")
+
+(p1 + p2)/(p3 + p4)
+```
+
+
+## Task 7 (16 points)
+
+For a general audience interpret your final model from the
+previous task.
+
+*****
+
+The model chosen for this task is comprehensive because we set 'hour' as a categorical variable, meaning there are a lot of dummy variables. The model goes as follow:
+
+- [Intercept] = 3.17031 Interpretation: Assuming [hour] is 0, temperature is $-9^o C$, and [weather] is 'clear/partly clouded', we expect then number of bike usage at that period will be `r round(exp(coef(nb.model2)[1]),0)`.
+
+- [Hour 5] = -0.44641 Interpretation: Given temperature and weather, we expect the number of bike usage at hour 1 to be `r round(exp(-0.44641),2)*100`% that of hour 0.
+- [Hour 12] = 1.45641 Interpretation: Given temperature and weather, we expect the number of bike usage at hour 1 to be `r round(exp(1.45641),2)*100`% that of hour 0.
+- [Hour 17] = 2.02188 Interpretation: Given temperature and weather, we expect the number of bike usage at hour 1 to be `r round(exp(2.02188),2)*100`% that of hour 0.
+- The same interpretation applies for all [hour] factors.
+
+- [temp] = 1.71080 Interpretation: Given [hour], [weather] and [temp] = 0.5, we expect an increment of .1 point of normalized [temp] will result in `r exp(1.71080*.6)/exp(1.71080*.5)` times the number of bike of that of [temp] = 0.5. Note that different temperature has different magnitude of number of bike change for each increment of .1 in [temp]. 
+
+- [weatherMist] Interpretation: Given hour and normalized temperature, we expect the number of bike usage when the weather is Mist to be `r round(exp(-0.05547),2)*100`% that of when the weather is Clear/Partly Cloudy.
+- [weatherRain or Snow] Interpretation: Given hour and normalized temperature, we expect the number of bike usage when the weather is Rain or Snow to be `r round(exp(-0.57206),2)*100`% that of when the weather is Clear/Partly Cloudy.
+
+
+
+## Task 8 (8 points)
+
+Some variables were not included in your final model.
+Select two of them and explain why you did not include
+them.
+Back up your argument with either a table or a graph.
+
+*****
+
+One of the variables I didn't include in the final model is Season. There is a correlation between variable season and normalized temperature as illustrated in the first graph below. It is true that one would argue since there is a significant difference for bike usage for each season. However, it is true that normalized temperature is better bike usage trend that doesn't appear if we are to use season. For example, when the weather is too hot, we see a dip in bike usage. 
+
+```{r, fig.align='center'}
+bnum.temp + bnum.season
+```
+
+The second variable I didn't include in the final model is [workday]. [workday] has value of 'Yes' if the day is a workday and 'No' if it is either a weekend or a holiday. As we see below there isn't a significant difference between bike usage mean for two responses. Furthermore, a disadvantage using 'workday' is we are **dismissing the relationship between 'weekday.code' and 'holiday.code' and 'bikes'**. For example, people might use bike more during holiday more than during the weekend (or reverse). The relationship between 'weekday.code', 'holiday.code', and 'bikes' needs to be clearly understood before implementing 'workday'.
+
+```{r, fig.align='center'}
+bnum.workday
+```
+
+
+## Task 9 (50 points)
+
+Write a short summary of your findings that you would
+share with the town administrators.
+Be sure to address a general audience and to focus your
+recommendations on solving the business problem they 
+face.
+
+Your written comments should not exceed 750 words.
+You may include two graphs and/or tables to support
+your arguments.
+
+*****
+
+```{r, echo = FALSE}
+year.sum <- bike %>%
+  mutate(year = as.factor(ifelse(year.code == 0, 2011, 2012))) %>%
+  group_by(year) %>%
+  summarise(sumBikes = sum(bikes))
+```
+
+Dear Customer, 
+
+We hope this email finds you well. 
+
+After a look through and analyzing the dataset, we determine that the data doesn't have sufficient information to develop a model predicting locations a bike is moving from and to. For that purpose, it would be helpful to have customer/bike travel log with location identifier columns that help to identify a bike's location. 
+
+The dataset provides useful insight of bike usage in a given time. This email is a summary of our discoveries and display final model used for predicting a given time's bike usage. 
+
+
+**Chosen Variables for Model Construction: **
+
+
+- After performing EDA, three variables that we will focus in our model are [temp], [weather], and [hour]. For [temp], as temperature increases, bike usage increases. However, if temperature gets too high, there is a dip in bike usage. For [weather], we see most bike usage when [weather] is 'clear/partly clouded'. Bike usage is less when [weather] is 'mist and rain/snow'. Bike usage is least when [weather] is 'rain/snow'. For [hour], bike usage is peaked during the hour of 8 (commuting time) and between hour 17 and 19 (evening time). We can see that there is less bike usage during late night or early morning (from hour 0 to 5).
+
+```{r, fig.align='center'}
+(bnum.temp + bnum.weather)/(bnum.hour)
+```
+
+- There are two notable variables that we do not consider. First is [season]. There is correlation between [season] and [temp]. For example, high [temp] value would suggest 'Summer'. Furthermore, there are relationship between bike usage and [temp] that [season] doesn't capture. An example is that we see a dip in bike usage when [temp] is too hot. Second is [workday]. We found that means of bike usage during workday and not workday is similar indicating [workday] would not be useful in final model. 
+
+```{r, fig.align='center'}
+(bnum.season + bnum.temp) / (bnum.workday)
+```
+
+
+**Modeling Technique:**
+
+- To develop our model, we first decide on what distribution is our data follows. In this case, we determine that dataset follows Negative Binomial Distribution. 
+- We set up our model using GLM function in R.
+- Diagnostic procedure is performed to ensure the model legitimacy.
+
+**Final Model:**
+
+- The model goes as follow:
+
+```{r, echo = FALSE}
+summary(nb.model2)
+```
+
+- [Intercept] = 3.17031 Interpretation: Assuming [hour] is 0, temperature is $-9^o C$, and [weather] is 'clear/partly clouded', we expect then number of bike usage at that period will be `r round(exp(coef(nb.model2)[1]),0)`.
+
+- [Hour 5] = -0.44641 Interpretation: Given temperature and weather, we expect the number of bike usage at hour 1 to be `r round(exp(-0.44641),2)*100`% that of hour 0.
+- [Hour 12] = 1.45641 Interpretation: Given temperature and weather, we expect the number of bike usage at hour 1 to be `r round(exp(1.45641),2)*100`% that of hour 0.
+- [Hour 17] = 2.02188 Interpretation: Given temperature and weather, we expect the number of bike usage at hour 1 to be `r round(exp(2.02188),2)*100`% that of hour 0.
+- The same interpretation applies for all [hour] factors.
+
+- [temp] = 1.71080 Interpretation: Given [hour], [weather] and [temp] = 0.5, we expect an increment of .1 point of normalized [temp] will result in `r exp(1.71080*.6)/exp(1.71080*.5)` times the number of bike of that of [temp] = 0.5. Note that different temperature has different magnitude of number of bike change for each increment of .1 in [temp]. 
+
+- [weatherMist] Interpretation: Given hour and normalized temperature, we expect the number of bike usage when the weather is Mist to be `r round(exp(-0.05547),2)*100`% that of when the weather is Clear/Partly Cloudy.
+- [weatherRain or Snow] Interpretation: Given hour and normalized temperature, we expect the number of bike usage when the weather is Rain or Snow to be `r round(exp(-0.57206),2)*100`% that of when the weather is Clear/Partly Cloudy.
+
+**Considerations and Recommendations: **
+
+- One consideration for this model is the prospective of how overall bike usage will change in the future. Our final model is greatly influenced by the year 2011 because bike usage of 2011 is only `r round(year.sum$sumBikes[1]/year.sum$sumBikes[2],2) * 100`% of that of 2012. Therefore, our model may underestimate the actual bike usage going forward in the future assuming that there will be growth in overall bike usage. 
+
+```{r, echo = FALSE, fig.align='center'}
+ggplot(data = year.sum, mapping = aes(x = year, y = sumBikes)) +
+  geom_bar(stat = 'identity', width = 0.7) +
+  geom_text(aes(label = sumBikes), vjust = -0.3, size = 4) + theme_minimal() +
+  labs(x = 'Year', y = 'Bike Usage', title = 'Bike Usage each Year')
+```
+
+
+- One recommendation is to include rows for hour when there is no bike usage in the dataset. Having row for every hour provides context to our model. For example, if we are to find mean bike usage during the winter. Having details of normalized temp, hour, and windspeed, would help us identify which period is mostly like not having customer or what is the pattern leading to less bike usage.  
+
+
+
+
+
+
+
